@@ -20,6 +20,7 @@ from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
 from transformers.models.granite.modeling_granite import (
     GraniteAttention,
     GraniteConfig,
+    GraniteDecoderLayer,
     GraniteForCausalLM,
     GraniteModel,
     GraniteRotaryEmbedding,
@@ -128,6 +129,7 @@ def qeff_apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
     Returns:
         `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
     """
+    # breakpoint()
     cos = cos[position_ids].unsqueeze(unsqueeze_dim)
     sin = sin[position_ids].unsqueeze(unsqueeze_dim)
 
@@ -167,6 +169,7 @@ class QEffGraniteAttention(GraniteAttention):
         query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
         key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
         value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        # breakpoint()
         kv_seq_len = key_states.shape[-2]
         if past_key_value is not None:
             if self.layer_idx is None:
@@ -178,7 +181,9 @@ class QEffGraniteAttention(GraniteAttention):
             kv_seq_len = past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
 
         cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+
         query_states, key_states = qeff_apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+        # breakpoint()
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
             cache_kwargs = {
@@ -204,7 +209,7 @@ class QEffGraniteAttention(GraniteAttention):
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         attn_output = self.o_proj(attn_output)
-        return attn_output, attn_weights, past_key_value
+        return attn_output, attn_weights
 
 
 class QEffGraniteModel(GraniteModel):
@@ -243,18 +248,24 @@ class QEffGraniteModel(GraniteModel):
 
         inputs_embeds = inputs_embeds * self.embedding_multiplier  # main diff with Llama
 
-        return_legacy_cache = False
-        if use_cache and not isinstance(past_key_values, Cache):
-            return_legacy_cache = True
+        # return_legacy_cache = False
+        # if use_cache and not isinstance(past_key_values, Cache):
+        #     return_legacy_cache = True
+        #     if past_key_values is None:
+        #         past_key_values = DynamicCache()
+        #     else:
+        #         past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+        #         logger.warning_once(
+        #             "We detected that you are passing `past_key_values` as a tuple of tuples. This is deprecated and "
+        #             "will be removed in v4.47. Please convert your cache or use an appropriate `Cache` class "
+        #             "(https://huggingface.co/docs/transformers/kv_cache#legacy-cache-format)"
+        #         )
+        # breakpoint()
+        if use_cache:
             if past_key_values is None:
                 past_key_values = DynamicCache()
             else:
                 past_key_values = DynamicCache.from_legacy_cache(past_key_values)
-                logger.warning_once(
-                    "We detected that you are passing `past_key_values` as a tuple of tuples. This is deprecated and "
-                    "will be removed in v4.47. Please convert your cache or use an appropriate `Cache` class "
-                    "(https://huggingface.co/docs/transformers/kv_cache#legacy-cache-format)"
-                )
 
         if cache_position is None:
             past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
@@ -270,17 +281,18 @@ class QEffGraniteModel(GraniteModel):
         )
 
         hidden_states = inputs_embeds
-
+        # breakpoint()
         # create position embeddings to be shared across the decoder layers
+        # position_embeddings = None
         position_embeddings = None
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
-        next_decoder_cache = None
+        # next_decoder_cache = None
         for decoder_layer in self.layers[: self.config.num_hidden_layers]:
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
-
+            # breakpoint()
             if self.gradient_checkpointing and self.training:
                 layer_outputs = self._gradient_checkpointing_func(
                     decoder_layer.__call__,
@@ -317,27 +329,19 @@ class QEffGraniteModel(GraniteModel):
                 )
 
             hidden_states = layer_outputs[0]
-
-            if use_cache:
-                next_decoder_cache = layer_outputs[2 if output_attentions else 1]
-
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
-
+        # breakpoint()
         hidden_states = self.norm(hidden_states)
 
         # add hidden states from the last decoder layer
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
-        next_cache = next_decoder_cache if use_cache else None
-        if return_legacy_cache:
-            next_cache = next_cache.to_legacy_cache()
-        if not return_dict:
-            return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None)
+        # next_cache = next_decoder_cache if use_cache else None
 
         output = BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
-            past_key_values=next_cache,
+            past_key_values=past_key_values.to_legacy_cache() if use_cache else None,
             hidden_states=all_hidden_states,
             attentions=all_self_attns,
         )
@@ -436,6 +440,7 @@ class QEffGraniteForCausalLM(GraniteForCausalLM):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
+        logits_to_keep: Union[int, torch.Tensor] = 0,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         r"""
         Args:
@@ -472,7 +477,6 @@ class QEffGraniteForCausalLM(GraniteForCausalLM):
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         outputs = self.model(
             input_ids=input_ids,
@@ -521,3 +525,69 @@ class QEffGraniteForCausalLM(GraniteForCausalLM):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
+
+
+class QEffGraniteDecoderLayer(GraniteDecoderLayer):
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_value: Optional[Cache] = None,
+        output_attentions: Optional[bool] = False,
+        use_cache: Optional[bool] = False,
+        cache_position: Optional[torch.LongTensor] = None,
+        position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # necessary, but kept here for BC
+        **kwargs,
+    ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+        """
+        Args:
+            hidden_states (`torch.FloatTensor`): input to the layer of shape `(batch, seq_len, embed_dim)`
+            attention_mask (`torch.FloatTensor`, *optional*):
+                attention mask of size `(batch_size, sequence_length)` if flash attention is used or `(batch_size, 1,
+                query_sequence_length, key_sequence_length)` if default attention is used.
+            output_attentions (`bool`, *optional*):
+                Whether or not to return the attentions tensors of all attention layers. See `attentions` under
+                returned tensors for more detail.
+            use_cache (`bool`, *optional*):
+                If set to `True`, `past_key_values` key value states are returned and can be used to speed up decoding
+                (see `past_key_values`).
+            past_key_value (`Tuple(torch.FloatTensor)`, *optional*): cached past key and value projection states
+            cache_position (`torch.LongTensor` of shape `(sequence_length)`, *optional*):
+                Indices depicting the position of the input sequence tokens in the sequence
+            position_embeddings (`Tuple[torch.FloatTensor, torch.FloatTensor]`, *optional*):
+                Tuple containing the cosine and sine positional embeddings of shape `(batch_size, seq_len, head_dim)`,
+                with `head_dim` being the embedding dimension of each attention head.
+            kwargs (`dict`, *optional*):
+                Arbitrary kwargs to be ignored, used for FSDP and other methods that injects code
+                into the model
+        """
+        residual = hidden_states
+        hidden_states = self.input_layernorm(hidden_states)
+        # Self Attention
+        hidden_states, self_attn_weights = self.self_attn(
+            hidden_states=hidden_states,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_value=past_key_value,
+            output_attentions=output_attentions,
+            use_cache=use_cache,
+            cache_position=cache_position,
+            position_embeddings=position_embeddings,
+            **kwargs,
+        )
+
+        hidden_states = residual + hidden_states * self.residual_multiplier
+
+        # Fully Connected
+        residual = hidden_states
+        hidden_states = self.post_attention_layernorm(hidden_states)
+        hidden_states = self.mlp(hidden_states)
+        hidden_states = residual + hidden_states * self.residual_multiplier  # main diff with Llama
+
+        outputs = (hidden_states,)
+
+        if output_attentions:
+            outputs += (self_attn_weights,)
+
+        return outputs
