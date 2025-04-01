@@ -130,22 +130,6 @@ class QEffGPTJAttention(GPTJAttention):
         key = key.permute(0, 2, 1, 3)
         query = query.permute(0, 2, 1, 3)
 
-        # if layer_past is not None:
-        #     # Added for optimized GPTJ Attention for AI 100 KV Retention
-        #     # Update the cache_kwargs with position_ids for Cloud AI 100
-        #     cache_kwargs = {"position_ids": position_ids, "batch_index": batch_index}
-        #     pkv = DynamicCache()
-        #     pkv.key_cache.append(layer_past[0])
-        #     pkv.value_cache.append(layer_past[1])
-        #     key, value = pkv.update(key, value, 0, cache_kwargs)
-
-        # if use_cache is True:
-        #     # Note that this cast is quite ugly, but is not implemented before ROPE as the original codebase keeps the key in float32 all along the computation.
-        #     # Reference: https://github.com/kingoflolz/mesh-transformer-jax/blob/f8315e3003033b23f21d78361b288953064e0e76/mesh_transformer/layers.py#L128
-        #     present = (pkv.key_cache[0].to(hidden_states.dtype), pkv.value_cache[0])
-        # else:
-        #     present = None
-        # breakpoint()
         if layer_past is not None:
             cache_kwargs = {
                 "sin": sin,
@@ -159,7 +143,6 @@ class QEffGPTJAttention(GPTJAttention):
 
         # compute self-attention: V x Softmax(QK^T)
         attn_output, attn_weights = self._attn(query, key, value, attention_mask, head_mask)
-        # breakpoint()
         attn_output = self._merge_heads(attn_output, self.num_attention_heads, self.head_dim)
         attn_output = self.out_proj(attn_output)
         attn_output = self.resid_dropout(attn_output)
