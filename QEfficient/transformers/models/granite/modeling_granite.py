@@ -107,8 +107,8 @@ def qeff_apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
     Returns:
         `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
     """
-    cos = cos.unsqueeze(unsqueeze_dim)
-    sin = sin.unsqueeze(unsqueeze_dim)
+    cos = cos[position_ids].unsqueeze(unsqueeze_dim)
+    sin = sin[position_ids].unsqueeze(unsqueeze_dim)
 
     # Apply rotation
     q_embed = (q * cos) + (rotate_half(q) * sin)
@@ -147,19 +147,16 @@ class QEffGraniteAttention(GraniteAttention):
         query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
         key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
         value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-        cos, sin = position_embeddings
+
+        kv_seq_len = key_states.shape[-2]
+        kv_seq_len = past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
+        cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
 
         query_states, key_states = qeff_apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
-            cache_kwargs = {
-                "sin": sin,
-                "cos": cos,
-                "cache_position": cache_position,
-                "batch_index": batch_index,
-                "position_ids": position_ids,
-            }
+            cache_kwargs = {"sin": sin, "cos": cos, "batch_index": batch_index, "position_ids": position_ids}
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
         attention_interface: Callable = eager_attention_forward
@@ -226,15 +223,11 @@ class QEffGraniteModel(GraniteModel):
         if position_ids is None:
             position_ids = cache_position.unsqueeze(0)
 
-        causal_mask = self._update_causal_mask(
-            attention_mask, inputs_embeds, cache_position, position_ids, past_key_values, output_attentions
-        )
+        causal_mask = _create_causal_mask(position_ids=position_ids, target_length=past_seen_tokens)
 
         hidden_states = inputs_embeds
 
-        # create position embeddings to be shared across the decoder layers
-
-        position_embeddings = self.rotary_emb(hidden_states, position_ids)
+        position_embeddings = None
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
@@ -276,20 +269,6 @@ class QEffGraniteModel(GraniteModel):
             attentions=all_self_attns,
         )
         return output if return_dict else output.to_tuple()
-
-    def _update_causal_mask(
-        self,
-        attention_mask: torch.Tensor,
-        input_tensor: torch.Tensor,
-        cache_position: torch.Tensor,
-        position_ids: torch.Tensor,
-        past_key_values: Cache,
-        output_attentions: bool,
-    ):
-        past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
-        target_length = attention_mask.shape[-1] if isinstance(attention_mask, torch.Tensor) else past_seen_tokens
-        causal_mask = _create_causal_mask(position_ids=position_ids, target_length=target_length)
-        return causal_mask
 
 
 class QEffGraniteForCausalLM(GraniteForCausalLM):
