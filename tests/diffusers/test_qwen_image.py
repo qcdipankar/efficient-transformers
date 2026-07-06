@@ -216,8 +216,15 @@ def qwen_pipeline_call_with_mad_validation(
             end_transformer_step_time = time.perf_counter()
             transformer_perf.append(end_transformer_step_time - start_transformer_step_time)
 
+            noise_pred_torch_np = noise_pred_torch.detach().cpu().numpy()
+            if noise_pred_torch_np.shape != outputs["output"].shape:
+                raise AssertionError(
+                    f"Transformer output shape mismatch at step {i} (t={t.item():.6f}): "
+                    f"PyTorch={noise_pred_torch_np.shape}, QAIC={outputs['output'].shape}"
+                )
+
             mad_validator.validate_module_mad(
-                noise_pred_torch.detach().cpu().numpy(),
+                noise_pred_torch_np,
                 outputs["output"],
                 module_name="transformer",
                 step_info=f"step {i} (t={t.item():.6f})",
@@ -282,8 +289,14 @@ def qwen_pipeline_call_with_mad_validation(
     end_decode_time = time.perf_counter()
     vae_decoder_perf = end_decode_time - start_decode_time
 
+    image_torch_np = image_torch.detach().cpu().numpy()
+    if image_torch_np.shape != image["sample"].shape:
+        raise AssertionError(
+            f"VAE decoder output shape mismatch: PyTorch={image_torch_np.shape}, QAIC={image['sample'].shape}"
+        )
+
     mad_validator.validate_module_mad(
-        image_torch.detach().cpu().numpy(),
+        image_torch_np,
         image["sample"],
         module_name="vae_decoder",
     )

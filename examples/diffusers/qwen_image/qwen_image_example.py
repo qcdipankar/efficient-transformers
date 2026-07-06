@@ -47,12 +47,12 @@ output = pipe(
     generator=torch.Generator(device="cpu").manual_seed(42),
     parallel_compile=True,
     max_sequence_length=128,
-    # use_onnx_subfunctions=True,
+    use_onnx_subfunctions=True,
 )
 
 # Extract the generated image from the output
 image = output.images[0]
 
 # Save the generated image to disk
-image.save("qwen_image_example.png")
+image.save("new_16_9_qwen_image_example.png")
 print(output)

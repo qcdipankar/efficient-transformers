@@ -545,9 +545,15 @@ class QEffQwenImagePipeline:
 
         # # Initialize transformer session
         if self.transformer.qpc_session is None:
-            self.transformer.qpc_session = QAICInferenceSession(
-                str(self.transformer.qpc_path), device_ids=self.transformer.device_ids
-            )
+            try:
+                self.transformer.qpc_session = QAICInferenceSession(
+                    str(self.transformer.qpc_path), device_ids=self.transformer.device_ids
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to initialize Qwen Image transformer session for qpc_path={self.transformer.qpc_path}, "
+                    f"device_ids={self.transformer.device_ids}."
+                ) from exc
 
         # 6. Denoising loop
         self.scheduler.set_begin_index(0)
@@ -577,9 +583,15 @@ class QEffQwenImagePipeline:
                     "timestep": timestep,
                 }
                 # Run transformer inference and measure time
-                start_transformer_step_time = time.perf_counter()
-                noise_pred = self.transformer.qpc_session.run(transformer_inputs)
-                end_transformer_step_time = time.perf_counter()
+                try:
+                    start_transformer_step_time = time.perf_counter()
+                    noise_pred = self.transformer.qpc_session.run(transformer_inputs)
+                    end_transformer_step_time = time.perf_counter()
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Qwen Image transformer inference failed at step={i}, timestep={float(t):.6f}, "
+                        f"latents_shape={tuple(latents.shape)}."
+                    ) from exc
                 transformer_perf.append(end_transformer_step_time - start_transformer_step_time)
 
                 noise_pred = torch.tensor(noise_pred["output"])
@@ -595,9 +607,15 @@ class QEffQwenImagePipeline:
                         "timestep": timestep,
                     }
 
-                    start_cfg_step_time = time.perf_counter()
-                    neg_noise_pred = self.transformer.qpc_session.run(transformer_inputs_uncond)
-                    end_cfg_step_time = time.perf_counter()
+                    try:
+                        start_cfg_step_time = time.perf_counter()
+                        neg_noise_pred = self.transformer.qpc_session.run(transformer_inputs_uncond)
+                        end_cfg_step_time = time.perf_counter()
+                    except Exception as exc:
+                        raise RuntimeError(
+                            f"Qwen Image CFG transformer inference failed at step={i}, timestep={float(t):.6f}, "
+                            f"latents_shape={tuple(latents.shape)}."
+                        ) from exc
                     cfg_perf.append(end_cfg_step_time - start_cfg_step_time)
 
                     neg_noise_pred = torch.tensor(neg_noise_pred["output"])
@@ -631,34 +649,57 @@ class QEffQwenImagePipeline:
         if output_type == "latent":
             image = latents
         else:
-            latents = self.model._unpack_latents(latents, height, width, self.vae_scale_factor)
-            latents = latents.to(self.vae_decoder.model.dtype)
-            latents_mean = (
-                torch.tensor(self.vae_decoder.model.config.latents_mean)
-                .view(1, self.vae_decoder.model.config.z_dim, 1, 1, 1)
-                .to(latents.device, latents.dtype)
-            )
-            latents_std = 1.0 / torch.tensor(self.vae_decoder.model.config.latents_std).view(
-                1, self.vae_decoder.model.config.z_dim, 1, 1, 1
-            ).to(latents.device, latents.dtype)
-            latents = latents / latents_std + latents_mean
+            try:
+                latents = self.model._unpack_latents(latents, height, width, self.vae_scale_factor)
+                latents = latents.to(self.vae_decoder.model.dtype)
+                latents_mean = (
+                    torch.tensor(self.vae_decoder.model.config.latents_mean)
+                    .view(1, self.vae_decoder.model.config.z_dim, 1, 1, 1)
+                    .to(latents.device, latents.dtype)
+                )
+                latents_std = 1.0 / torch.tensor(self.vae_decoder.model.config.latents_std).view(
+                    1, self.vae_decoder.model.config.z_dim, 1, 1, 1
+                ).to(latents.device, latents.dtype)
+                latents = latents / latents_std + latents_mean
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to prepare Qwen Image VAE latents for height={height}, width={width}, "
+                    f"vae_scale_factor={self.vae_scale_factor}."
+                ) from exc
 
             ########## QAIC
             # Initialize VAE decoder inference session
             if self.vae_decoder.qpc_session is None:
-                self.vae_decoder.qpc_session = QAICInferenceSession(
-                    str(self.vae_decoder.qpc_path), device_ids=self.vae_decoder.device_ids
-                )
+                try:
+                    self.vae_decoder.qpc_session = QAICInferenceSession(
+                        str(self.vae_decoder.qpc_path), device_ids=self.vae_decoder.device_ids
+                    )
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Failed to initialize Qwen Image VAE decoder session for qpc_path={self.vae_decoder.qpc_path}, "
+                        f"device_ids={self.vae_decoder.device_ids}."
+                    ) from exc
 
             # Allocate output buffer for VAE decoder
             output_buffer = {"sample": np.random.rand(batch_size, 3, 1, height, width).astype(np.int32)}
-            self.vae_decoder.qpc_session.set_buffers(output_buffer)
+            try:
+                self.vae_decoder.qpc_session.set_buffers(output_buffer)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to allocate Qwen Image VAE decoder output buffer with shape "
+                    f"{output_buffer['sample'].shape}."
+                ) from exc
 
             # Run VAE decoder inference and measure time
             inputs = {"latent_sample": latents.numpy()}
-            start_decode_time = time.perf_counter()
-            image = self.vae_decoder.qpc_session.run(inputs)
-            end_decode_time = time.perf_counter()
+            try:
+                start_decode_time = time.perf_counter()
+                image = self.vae_decoder.qpc_session.run(inputs)
+                end_decode_time = time.perf_counter()
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Qwen Image VAE decoder inference failed for latent_sample_shape={tuple(latents.shape)}."
+                ) from exc
             vae_decoder_perf = end_decode_time - start_decode_time
 
             image_tensor = torch.from_numpy(image["sample"])

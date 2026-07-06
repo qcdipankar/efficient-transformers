@@ -40,7 +40,7 @@ class QEffQwenImageResample(QwenImageResample):
 
     def __qeff_init__(self):
         # Changed upsampling mode from "nearest-exact" to "nearest" for ONNX compatibility.
-        # Since the scale factor is an integer, both modes behave the
+        # Since the scale factor is an integer, both modes behave identically here.
         if self.mode in ("upsample2d", "upsample3d"):
             self.resample[0] = QwenImageUpsample(scale_factor=(2.0, 2.0), mode="nearest")
 

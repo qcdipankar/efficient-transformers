@@ -105,7 +105,7 @@ output = pipeline(
     custom_config_path="examples/diffusers/qwen_image/qwen_config.json",
     parallel_compile=True,
     max_sequence_length=128,
-    use_onnx_subfunctions=False,
+    use_onnx_subfunctions=True,
 )
 
 image = output.images[0]
