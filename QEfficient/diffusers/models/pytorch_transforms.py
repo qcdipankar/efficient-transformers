@@ -33,6 +33,7 @@ from diffusers.models.transformers.transformer_qwenimage import (
 )
 from diffusers.models.transformers.transformer_wan import WanAttention, WanAttnProcessor, WanTransformer3DModel
 from torch import nn
+from transformers.models.clip.modeling_clip import CLIPTextTransformer
 
 from QEfficient.base.pytorch_transforms import ModuleMappingTransform
 from QEfficient.customop.rms_norm import CustomRMSNormAIC
@@ -71,12 +72,19 @@ from QEfficient.diffusers.models.transformers.transformer_wan import (
     QEffWanAttnProcessor,
     QEffWanTransformer3DModel,
 )
+from QEfficient.transformers.models.clip.modeling_clip import QEffCLIPTextTransformer
 
 
 class CustomOpsTransform(ModuleMappingTransform):
     _module_mapping = {
         RMSNorm: CustomRMSNormAIC,
         nn.RMSNorm: CustomRMSNormAIC,  #  for torch.nn.RMSNorm
+    }
+
+
+class CLIPTextTransform(ModuleMappingTransform):
+    _module_mapping = {
+        CLIPTextTransformer: QEffCLIPTextTransformer,
     }
 
 
